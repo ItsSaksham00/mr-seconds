@@ -10,7 +10,7 @@ import {
 import { Canvas, useFrame, useLoader } from "@react-three/fiber";
 
 import {
-  Environment,
+  // Environment,
   Html,
   OrbitControls,
   useGLTF,
@@ -898,7 +898,7 @@ function ModelViewer({
           speechRef={speechRef}
         />
 
-        <Environment preset="studio" />
+        {/* <Environment preset="studio" /> */}
       </Suspense>
 
       <OrbitControls

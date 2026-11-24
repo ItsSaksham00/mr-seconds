@@ -369,3 +369,317 @@ body,
     min-height: 85px;
   }
 }
+
+
+
+
+/* ============================================
+   MR. SECONDS — RESPONSIVE LAYOUT V2.3
+   Desktop / Tablet / Mobile
+============================================ */
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+html {
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.app {
+  width: 100%;
+  min-height: 100dvh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  width: 100%;
+  flex-shrink: 0;
+  padding: 16px clamp(16px, 3vw, 36px);
+  gap: 12px;
+}
+
+.brand {
+  min-width: 0;
+}
+
+.brand h1 {
+  font-size: clamp(18px, 2vw, 23px);
+  line-height: 1.2;
+}
+
+.brand p {
+  font-size: clamp(11px, 1.2vw, 13px);
+}
+
+.version {
+  white-space: nowrap;
+}
+
+.viewer {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
+
+.viewer canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  touch-action: none;
+}
+
+.animation-controls {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 10;
+  width: min(290px, calc(100% - 40px));
+  max-height: calc(100% - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.speech-panel {
+  min-width: 0;
+  width: 100%;
+}
+
+.speech-input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  resize: vertical;
+}
+
+.wave-button {
+  width: 100%;
+  min-height: 42px;
+}
+
+.viewer-info {
+  max-width: calc(100% - 40px);
+}
+
+.footer {
+  flex-shrink: 0;
+  padding: 14px clamp(16px, 3vw, 36px);
+}
+
+/* ============================================
+   TABLETS & SMALL LAPTOPS
+============================================ */
+
+@media (max-width: 1024px) {
+  .header {
+    padding: 15px 22px;
+  }
+
+  .animation-controls {
+    top: 16px;
+    left: 16px;
+    width: 250px;
+    max-height: calc(100% - 32px);
+  }
+
+  .viewer-info {
+    left: 16px;
+    bottom: 16px;
+  }
+}
+
+/* ============================================
+   MOBILE DEVICES
+============================================ */
+
+@media (max-width: 640px) {
+  .app {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+
+  .header {
+    padding:
+      max(12px, env(safe-area-inset-top))
+      16px
+      12px;
+  }
+
+  .brand {
+    gap: 10px;
+  }
+
+  .brand-icon {
+    font-size: 25px;
+  }
+
+  .brand h1 {
+    font-size: 19px;
+  }
+
+  .brand p {
+    font-size: 11px;
+  }
+
+  .version {
+    display: none;
+  }
+
+  /*
+    Stack the 3D viewer above the controls.
+    This prevents the controls from hiding
+    Mr. Seconds on narrow screens.
+  */
+
+  .viewer {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    height: auto;
+  }
+
+  /*
+    The React Three Fiber Canvas is directly
+    inside .viewer. Give it its own height,
+    rather than allowing it to collapse.
+  */
+
+  .viewer > div:first-child {
+    position: relative !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    height: clamp(280px, 48dvh, 440px) !important;
+    min-height: 280px;
+    overflow: hidden;
+  }
+
+  .viewer canvas {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /*
+    Move the animation panel out of its
+    desktop overlay position.
+  */
+
+  .animation-controls {
+    position: relative;
+    top: auto;
+    left: auto;
+
+    width: calc(100% - 32px);
+    max-width: 480px;
+    max-height: none;
+
+    margin: 12px auto 20px;
+    padding: 16px;
+
+    overflow: visible;
+    flex-shrink: 0;
+  }
+
+  .control-heading {
+    font-size: 14px;
+  }
+
+  .speech-input {
+    min-height: 88px;
+    max-height: 180px;
+    font-size: 16px;
+  }
+
+  .wave-button {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .viewer-info {
+    display: none;
+  }
+
+  .footer {
+    padding:
+      12px 16px
+      max(12px, env(safe-area-inset-bottom));
+
+    font-size: 11px;
+  }
+
+  .footer span:last-child {
+    display: none;
+  }
+}
+
+/* ============================================
+   VERY SMALL PHONES
+============================================ */
+
+@media (max-width: 380px) {
+  .header {
+    padding: 10px 12px;
+  }
+
+  .brand h1 {
+    font-size: 17px;
+  }
+
+  .brand p {
+    font-size: 10px;
+  }
+
+  .viewer > div:first-child {
+    height: 42dvh !important;
+    min-height: 240px;
+  }
+
+  .animation-controls {
+    width: calc(100% - 20px);
+    margin: 10px auto 16px;
+    padding: 13px;
+  }
+}
+
+/* ============================================
+   SHORT LANDSCAPE SCREENS
+============================================ */
+
+@media (max-height: 480px) and (min-width: 641px) {
+  .header {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .animation-controls {
+    top: 8px;
+    left: 8px;
+    max-height: calc(100% - 16px);
+    padding: 12px;
+  }
+
+  .footer {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+}

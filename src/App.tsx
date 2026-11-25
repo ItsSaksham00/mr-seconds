@@ -5,22 +5,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 
 import { Canvas, useFrame, useLoader } from "@react-three/fiber";
-
-import {
-  // Environment,
-  Html,
-  OrbitControls,
-  useGLTF,
-} from "@react-three/drei";
+import { Html, OrbitControls, useGLTF } from "@react-three/drei";
 
 import {
   Box3,
   CanvasTexture,
   Group,
-  Material,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -32,10 +26,10 @@ import {
 
 import "./App.css";
 
-// ==================================================
-// MR. SECONDS V2.3 — FIRST VOICE
-// Browser speech synthesis + approximate lip-sync
-// ==================================================
+// ==========================================
+// MR. SECONDS V2.5
+// GEMINI AI + AZURE DUSTIN + LIP SYNC
+// ==========================================
 
 const MODEL_PATH = "/models/MrSeconds.glb";
 
@@ -44,56 +38,35 @@ const FACE_PATHS = [
   "/textures/face_blink.png",
 ];
 
-const EYE_REGION = {
-  x: 215,
-  y: 165,
-  w: 590,
-  h: 430,
+type Viseme = {
+  timeMs: number;
+  id: number;
 };
 
-const MOUTH_REGION = {
-  x: 330,
-  y: 605,
-  w: 370,
-  h: 210,
+type SpeechResult = {
+  audioBase64: string;
+  mimeType: string;
+  voice: string;
+  visemes: Viseme[];
 };
 
-function clamp(value: number, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, value));
-}
+type Playback = {
+  audio: HTMLAudioElement;
+  visemes: Viseme[];
+};
 
-function smooth(value: number) {
-  const t = clamp(value);
-  return t * t * (3 - 2 * t);
-}
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
 
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function normalizeName(value: string) {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-function findNamedObject(root: Object3D, name: string) {
-  const target = normalizeName(name);
-  let found: Object3D | undefined;
-
-  root.traverse((object) => {
-    if (
-      !found &&
-      normalizeName(object.name).includes(target)
-    ) {
-      found = object;
-    }
-  });
-
-  return found;
-}
-
-// ==================================================
-// MOUTH SHAPES
-// ==================================================
+type MouthPose = {
+  width: number;
+  height: number;
+  round: number;
+  teeth: number;
+  tongue: number;
+};
 
 type PoseName =
   | "rest"
@@ -104,71 +77,28 @@ type PoseName =
   | "ee"
   | "oo";
 
-type MouthPose = {
-  width: number;
-  height: number;
-  round: number;
-  teeth: number;
-  tongue: number;
-};
-
 const POSES: Record<PoseName, MouthPose> = {
-  rest: {
-    width: 220,
-    height: 0,
-    round: 0,
-    teeth: 0,
-    tongue: 0,
-  },
-
-  closed: {
-    width: 174,
-    height: 3,
-    round: 0,
-    teeth: 0,
-    tongue: 0,
-  },
-
-  small: {
-    width: 145,
-    height: 38,
-    round: 0.3,
-    teeth: 0,
-    tongue: 0.3,
-  },
-
-  ah: {
-    width: 185,
-    height: 118,
-    round: 0.65,
-    teeth: 0.55,
-    tongue: 0.9,
-  },
-
-  oh: {
-    width: 114,
-    height: 122,
-    round: 1,
-    teeth: 0,
-    tongue: 0.5,
-  },
-
-  ee: {
-    width: 220,
-    height: 48,
-    round: 0,
-    teeth: 0.85,
-    tongue: 0.2,
-  },
-
-  oo: {
-    width: 86,
-    height: 83,
-    round: 1,
-    teeth: 0,
-    tongue: 0.25,
-  },
+  rest:   { width: 220, height: 0, round: 0, teeth: 0, tongue: 0 },
+  closed: { width: 174, height: 3, round: 0, teeth: 0, tongue: 0 },
+  small:  { width: 145, height: 38, round: 0.3, teeth: 0, tongue: 0.3 },
+  ah:     { width: 185, height: 118, round: 0.65, teeth: 0.55, tongue: 0.9 },
+  oh:     { width: 114, height: 122, round: 1, teeth: 0, tongue: 0.5 },
+  ee:     { width: 220, height: 48, round: 0, teeth: 0.85, tongue: 0.2 },
+  oo:     { width: 86, height: 83, round: 1, teeth: 0, tongue: 0.25 },
 };
+
+function clamp(value: number, low = 0, high = 1) {
+  return Math.max(low, Math.min(high, value));
+}
+
+function lerp(a: number, b: number, amount: number) {
+  return a + (b - a) * amount;
+}
+
+function smooth(amount: number) {
+  const t = clamp(amount);
+  return t * t * (3 - 2 * t);
+}
 
 function mixPose(
   a: MouthPose,
@@ -184,9 +114,99 @@ function mixPose(
   };
 }
 
-// ==================================================
-// DRAW THE MOUTH
-// ==================================================
+function normalizeName(name: string) {
+  return name.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function findNamedObject(root: Object3D, name: string) {
+  const wanted = normalizeName(name);
+  let match: Object3D | undefined;
+
+  root.traverse((obj) => {
+    if (!match && normalizeName(obj.name).includes(wanted)) {
+      match = obj;
+    }
+  });
+
+  return match;
+}
+
+// ==========================================
+// AZURE VISEME → MOUTH SHAPE
+// ==========================================
+
+function poseFromViseme(id: number): PoseName {
+  switch (id) {
+    case 0:
+      return "rest";
+
+    case 1:
+    case 2:
+      return "ah";
+
+    case 3:
+    case 8:
+    case 10:
+      return "oh";
+
+    case 4:
+    case 5:
+    case 9:
+      return "small";
+
+    case 6:
+    case 11:
+      return "ee";
+
+    case 7:
+      return "oo";
+
+    case 21:
+      return "closed";
+
+    case 18:
+      return "ee";
+
+    case 12:
+    case 13:
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+    case 19:
+    case 20:
+      return "small";
+
+    default:
+      return "rest";
+  }
+}
+
+function getCurrentViseme(
+  visemes: Viseme[],
+  timeMs: number
+): number {
+  let left = 0;
+  let right = visemes.length - 1;
+  let id = 0;
+
+  while (left <= right) {
+    const middle = (left + right) >> 1;
+
+    if (visemes[middle].timeMs <= timeMs) {
+      id = visemes[middle].id;
+      left = middle + 1;
+    } else {
+      right = middle - 1;
+    }
+  }
+
+  return id;
+}
+
+// ==========================================
+// PROCEDURAL MOUTH DRAWING
+// ==========================================
 
 function drawMouth(
   ctx: CanvasRenderingContext2D,
@@ -203,7 +223,6 @@ function drawMouth(
   ctx.lineJoin = "round";
 
   if (h < 9) {
-    // Closed smiling mouth.
     ctx.strokeStyle = "#292d36";
     ctx.lineWidth = 7;
 
@@ -237,7 +256,6 @@ function drawMouth(
   ctx.lineWidth = 5;
 
   ctx.beginPath();
-
   ctx.moveTo(left, cy - h * 0.08);
 
   ctx.bezierCurveTo(
@@ -262,31 +280,23 @@ function drawMouth(
   ctx.fill();
   ctx.stroke();
 
-  // Teeth
   if (pose.teeth > 0.08 && h > 22) {
     ctx.fillStyle = "#fff5e8";
-
     ctx.beginPath();
     ctx.ellipse(
       cx,
       top + h * 0.22,
       w * 0.32,
-      Math.max(
-        1,
-        Math.min(h * 0.18, 15) * pose.teeth
-      ),
+      Math.max(1, Math.min(h * 0.18, 15) * pose.teeth),
       0,
       0,
       Math.PI * 2
     );
-
     ctx.fill();
   }
 
-  // Tongue
   if (pose.tongue > 0.08 && h > 20) {
     ctx.fillStyle = "#ec7382";
-
     ctx.beginPath();
     ctx.ellipse(
       cx,
@@ -297,16 +307,15 @@ function drawMouth(
       0,
       Math.PI * 2
     );
-
     ctx.fill();
   }
 
   ctx.restore();
 }
 
-// ==================================================
-// FACIAL TEXTURE
-// ==================================================
+// ==========================================
+// ANIMATED FACE TEXTURE
+// ==========================================
 
 function createFaceAnimator(
   normal: HTMLImageElement,
@@ -320,7 +329,7 @@ function createFaceAnimator(
   const context = canvas.getContext("2d");
 
   if (!context) {
-    throw new Error("Cannot create facial canvas.");
+    throw new Error("Cannot create face canvas.");
   }
 
   const ctx: CanvasRenderingContext2D = context;
@@ -331,21 +340,13 @@ function createFaceAnimator(
   function paint(
     blinking: boolean,
     pose: MouthPose,
-    customMouth: boolean
+    talking: boolean
   ) {
     ctx.save();
-
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
 
-    ctx.clearRect(
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Normal face artwork.
     ctx.drawImage(
       normal,
       0,
@@ -355,10 +356,10 @@ function createFaceAnimator(
     );
 
     if (blinking) {
-      const x = EYE_REGION.x * sx;
-      const y = EYE_REGION.y * sy;
-      const w = EYE_REGION.w * sx;
-      const h = EYE_REGION.h * sy;
+      const x = 215 * sx;
+      const y = 165 * sy;
+      const w = 590 * sx;
+      const h = 430 * sy;
 
       ctx.clearRect(x, y, w, h);
 
@@ -369,21 +370,17 @@ function createFaceAnimator(
       );
     }
 
-    if (customMouth) {
-      // Erase existing mouth before drawing a
-      // different expression.
+    if (talking) {
       ctx.clearRect(
-        MOUTH_REGION.x * sx,
-        MOUTH_REGION.y * sy,
-        MOUTH_REGION.w * sx,
-        MOUTH_REGION.h * sy
+        330 * sx,
+        605 * sy,
+        370 * sx,
+        210 * sy
       );
 
       ctx.save();
       ctx.scale(sx, sy);
-
       drawMouth(ctx, pose);
-
       ctx.restore();
     }
 
@@ -393,7 +390,6 @@ function createFaceAnimator(
   paint(false, POSES.rest, false);
 
   const texture = new CanvasTexture(canvas);
-
   texture.flipY = false;
   texture.colorSpace = SRGBColorSpace;
   texture.needsUpdate = true;
@@ -404,9 +400,9 @@ function createFaceAnimator(
     update(
       blinking: boolean,
       pose: MouthPose,
-      customMouth: boolean
+      talking: boolean
     ) {
-      paint(blinking, pose, customMouth);
+      paint(blinking, pose, talking);
       texture.needsUpdate = true;
     },
 
@@ -416,99 +412,9 @@ function createFaceAnimator(
   };
 }
 
-// ==================================================
-// SPEECH TIMING STATE
-// ==================================================
-
-// Browser speech events update this object.
-// React Three Fiber reads it during each frame
-// without requiring a React re-render.
-
-type SpeechTiming = {
-  active: boolean;
-  text: string;
-  startedAt: number;
-  word: string;
-  wordStartedAt: number;
-  hasBoundary: boolean;
-};
-
-function newSpeechTiming(): SpeechTiming {
-  return {
-    active: false,
-    text: "",
-    startedAt: 0,
-    word: "",
-    wordStartedAt: 0,
-    hasBoundary: false,
-  };
-}
-
-// These are approximations from written letters,
-// not actual phonemes from the speech engine.
-
-function poseForLetter(letter: string): PoseName {
-  const c = letter.toLowerCase();
-
-  if ("mbp".includes(c) && c.length === 1) {
-    return "closed";
-  }
-
-  if (c === "a") return "ah";
-  if (c === "o") return "oh";
-  if (c === "u" || c === "w") return "oo";
-  if ("eiy".includes(c) && c.length === 1) {
-    return "ee";
-  }
-
-  if (/^[a-z]$/.test(c)) return "small";
-
-  return "rest";
-}
-
-function speechPose(
-  speech: SpeechTiming,
-  now: number
-): PoseName {
-  if (!speech.active) return "rest";
-
-  if (speech.hasBoundary && speech.word) {
-    const elapsed = Math.max(
-      0,
-      (now - speech.wordStartedAt) / 1000
-    );
-
-    // Approximate 1 letter movement every
-    // 120 milliseconds after word starts.
-    const index = Math.min(
-      speech.word.length - 1,
-      Math.floor(elapsed / 0.12)
-    );
-
-    const letter = speech.word[index];
-
-    return poseForLetter(letter);
-  }
-
-  // Fallback for browsers that do not provide
-  // word-boundary events.
-  const elapsed = Math.max(
-    0,
-    (now - speech.startedAt) / 1000
-  );
-
-  const index = Math.floor(elapsed * 9);
-
-  const letter = speech.text[
-    Math.min(index, speech.text.length - 1)
-  ] ?? " ";
-
-  return poseForLetter(letter);
-}
-
-// ==================================================
-// WAVING — SAME APPROACH AS V2.2
-// ==================================================
+// ==========================================
+// WAVE ANIMATION
+// ==========================================
 
 const WAVE_KEYS: [number, number][] = [
   [0, 0],
@@ -521,38 +427,34 @@ const WAVE_KEYS: [number, number][] = [
 ];
 
 function getWaveAngle(time: number) {
-  if (time <= 0 || time >= 1.85) {
-    return 0;
-  }
+  if (time <= 0 || time >= 1.85) return 0;
 
   for (let i = 0; i < WAVE_KEYS.length - 1; i++) {
     const [t1, a1] = WAVE_KEYS[i];
     const [t2, a2] = WAVE_KEYS[i + 1];
 
     if (time >= t1 && time <= t2) {
-      const progress = smooth(
-        (time - t1) / (t2 - t1)
-      );
+      const p = smooth((time - t1) / (t2 - t1));
 
       return (
-        a1 + (a2 - a1) * progress
-      ) * Math.PI / 180;
+        ((a1 + (a2 - a1) * p) * Math.PI) / 180
+      );
     }
   }
 
   return 0;
 }
 
-// ==================================================
-// MR. SECONDS MODEL
-// ==================================================
+// ==========================================
+// 3D MODEL
+// ==========================================
 
 function MrSecondsModel({
   waveRequest,
-  speechRef,
+  playbackRef,
 }: {
   waveRequest: number;
-  speechRef: React.RefObject<SpeechTiming>;
+  playbackRef: RefObject<Playback | null>;
 }) {
   const { scene } = useGLTF(MODEL_PATH);
 
@@ -562,7 +464,6 @@ function MrSecondsModel({
   );
 
   const idleRef = useRef<Group>(null);
-
   const waveTime = useRef(10);
   const previousWave = useRef(waveRequest);
 
@@ -570,10 +471,9 @@ function MrSecondsModel({
     ...POSES.rest,
   });
 
-  const mouthEnergy = useRef(0);
-  const lastActive = useRef(false);
   const refreshTime = useRef(0);
   const lastBlink = useRef(false);
+  const lastTalking = useRef(false);
 
   const model = useMemo(() => {
     const root = scene.clone(true);
@@ -588,20 +488,17 @@ function MrSecondsModel({
     bounds.getCenter(center);
     bounds.getSize(size);
 
-    const scale = 4 / Math.max(
-      size.x,
-      size.y,
-      size.z,
-      0.001
-    );
+    const scale =
+      4 /
+      Math.max(size.x, size.y, size.z, 0.001);
 
     let waveControl = findNamedObject(
       root,
       "MS_V17_RIGHT_ARM_CONTROL"
     );
 
-    // Fallback if Blender controller was not
-    // included in the static GLB.
+    // Use a React pivot if the GLB doesn't
+    // contain Blender's wave controller.
     if (!waveControl) {
       const arm = findNamedObject(
         root,
@@ -625,6 +522,7 @@ function MrSecondsModel({
         );
 
         const pivot = new Group();
+
         pivot.name = "MS_REACT_WAVE_CONTROL";
 
         root.add(pivot);
@@ -636,8 +534,7 @@ function MrSecondsModel({
 
         root.traverse((obj) => {
           if (
-            normalizeName(obj.name).startsWith("GLOVER") &&
-            obj !== pivot
+            normalizeName(obj.name).startsWith("GLOVER")
           ) {
             parts.push(obj);
           }
@@ -656,9 +553,9 @@ function MrSecondsModel({
           return true;
         });
 
-        for (const part of topLevel) {
+        topLevel.forEach((part) => {
           pivot.attach(part);
-        }
+        });
 
         waveControl = pivot;
       }
@@ -669,36 +566,39 @@ function MrSecondsModel({
       blink.image as HTMLImageElement
     );
 
-    const faceObject = findNamedObject(
+    const face = findNamedObject(
       root,
       "FACE ART V1.2"
     );
 
-    const createdMaterials: Material[] = [];
+    const createdMaterials: (
+      | MeshBasicMaterial
+      | MeshStandardMaterial
+    )[] = [];
 
-    if (faceObject) {
-      faceObject.traverse((obj) => {
+    if (face) {
+      face.traverse((obj) => {
         if (!(obj instanceof Mesh)) return;
 
         const originals = Array.isArray(obj.material)
           ? obj.material
           : [obj.material];
 
-        const replacements = originals.map((mat) => {
-          const cloned = mat.clone();
+        const replacements = originals.map((material) => {
+          const clone = material.clone();
 
           if (
-            cloned instanceof MeshBasicMaterial ||
-            cloned instanceof MeshStandardMaterial
+            clone instanceof MeshBasicMaterial ||
+            clone instanceof MeshStandardMaterial
           ) {
-            cloned.map = faceAnimator.texture;
-            cloned.transparent = true;
-            cloned.needsUpdate = true;
+            clone.map = faceAnimator.texture;
+            clone.transparent = true;
+            clone.needsUpdate = true;
+
+            createdMaterials.push(clone);
           }
 
-          createdMaterials.push(cloned);
-
-          return cloned;
+          return clone;
         });
 
         obj.material = Array.isArray(obj.material)
@@ -706,9 +606,7 @@ function MrSecondsModel({
           : replacements[0];
       });
     } else {
-      console.warn(
-        "Mr. Seconds face mesh not found."
-      );
+      console.warn("Mr. Seconds face mesh not found.");
     }
 
     return {
@@ -716,8 +614,7 @@ function MrSecondsModel({
       center,
       scale,
       waveControl,
-      originalRotation:
-        waveControl?.rotation.z ?? 0,
+      originalRotation: waveControl?.rotation.z ?? 0,
       faceAnimator,
       createdMaterials,
     };
@@ -726,19 +623,13 @@ function MrSecondsModel({
   useEffect(() => {
     return () => {
       model.faceAnimator.dispose();
-
-      model.createdMaterials.forEach((mat) => {
-        mat.dispose();
-      });
+      model.createdMaterials.forEach((m) => m.dispose());
     };
   }, [model]);
 
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime;
-
-    // ---------------------------------------
-    // IDLE
-    // ---------------------------------------
+    const dt = Math.min(delta, 0.05);
 
     if (idleRef.current) {
       idleRef.current.position.y =
@@ -748,16 +639,12 @@ function MrSecondsModel({
         Math.sin(t * 0.9) * 0.035;
     }
 
-    // ---------------------------------------
-    // WAVING
-    // ---------------------------------------
-
-    if (waveRequest !== previousWave.current) {
+    if (previousWave.current !== waveRequest) {
       previousWave.current = waveRequest;
       waveTime.current = 0;
     }
 
-    waveTime.current += Math.min(delta, 0.1);
+    waveTime.current += dt;
 
     if (model.waveControl) {
       model.waveControl.rotation.z =
@@ -765,78 +652,56 @@ function MrSecondsModel({
         getWaveAngle(waveTime.current);
     }
 
-    // ---------------------------------------
-    // BLINKING
-    // ---------------------------------------
-
     const cycle = t % 4.8;
 
     const blinking =
       cycle < 0.14 ||
       (cycle > 0.29 && cycle < 0.36);
 
-    // ---------------------------------------
-    // SPEECH-DRIVEN MOUTH
-    // ---------------------------------------
+    const playback = playbackRef.current;
 
-    const speech = speechRef.current;
-
-    const targetName = speechPose(
-      speech,
-      performance.now()
+    const talking = Boolean(
+      playback &&
+      !playback.audio.paused &&
+      !playback.audio.ended
     );
 
-    const target = POSES[targetName];
+    let target = POSES.rest;
 
-    // Smoothly approach each new mouth shape.
-    const factor =
-      1 - Math.exp(-13 * Math.min(delta, 0.05));
+    if (talking && playback) {
+      const timeMs =
+        playback.audio.currentTime * 1000;
+
+      const id = getCurrentViseme(
+        playback.visemes,
+        timeMs
+      );
+
+      target = POSES[poseFromViseme(id)];
+    }
 
     currentPose.current = mixPose(
       currentPose.current,
       target,
-      factor
+      1 - Math.exp(-(talking ? 24 : 12) * dt)
     );
-
-    // Fade between custom talking mouth
-    // and the original smile as speech ends.
-    const energyTarget = speech.active ? 1 : 0;
-
-    mouthEnergy.current = lerp(
-      mouthEnergy.current,
-      energyTarget,
-      1 - Math.exp(-9 * Math.min(delta, 0.05))
-    );
-
-    const customMouth =
-      speech.active || mouthEnergy.current > 0.025;
-
-    // ---------------------------------------
-    // REFRESH FACE TEXTURE
-    // ---------------------------------------
 
     refreshTime.current += delta;
 
-    const activeChanged =
-      speech.active !== lastActive.current;
-
-    const blinkChanged =
-      blinking !== lastBlink.current;
-
     if (
-      activeChanged ||
-      blinkChanged ||
+      blinking !== lastBlink.current ||
+      talking !== lastTalking.current ||
       refreshTime.current >= 1 / 30
     ) {
       model.faceAnimator.update(
         blinking,
         currentPose.current,
-        customMouth
+        talking
       );
 
-      refreshTime.current = 0;
-      lastActive.current = speech.active;
       lastBlink.current = blinking;
+      lastTalking.current = talking;
+      refreshTime.current = 0;
     }
   });
 
@@ -857,16 +722,16 @@ function MrSecondsModel({
   );
 }
 
-// ==================================================
-// VIEWER
-// ==================================================
+// ==========================================
+// CANVAS VIEWER
+// ==========================================
 
 function ModelViewer({
   waveRequest,
-  speechRef,
+  playbackRef,
 }: {
   waveRequest: number;
-  speechRef: React.RefObject<SpeechTiming>;
+  playbackRef: RefObject<Playback | null>;
 }) {
   return (
     <Canvas
@@ -877,7 +742,10 @@ function ModelViewer({
         far: 1000,
       }}
       gl={{ antialias: true, alpha: true }}
-      style={{ width: "100%", height: "100%" }}
+      style={{
+        width: "100%",
+        height: "100%",
+      }}
     >
       <ambientLight intensity={1.4} />
 
@@ -895,10 +763,8 @@ function ModelViewer({
       >
         <MrSecondsModel
           waveRequest={waveRequest}
-          speechRef={speechRef}
+          playbackRef={playbackRef}
         />
-
-        {/* <Environment preset="studio" /> */}
       </Suspense>
 
       <OrbitControls
@@ -912,172 +778,328 @@ function ModelViewer({
   );
 }
 
-// ==================================================
-// APPLICATION + BROWSER SPEECH
-// ==================================================
+// ==========================================
+// AUDIO UTILITIES
+// ==========================================
+
+function createAudioURL(
+  base64: string,
+  mimeType: string
+) {
+  const binary = atob(base64);
+
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  const blob = new Blob([bytes], {
+    type: mimeType,
+  });
+
+  return URL.createObjectURL(blob);
+}
+
+// ==========================================
+// MAIN APP
+// ==========================================
 
 export default function App() {
   const [waveRequest, setWaveRequest] = useState(0);
 
-  const [message, setMessage] = useState(
-    "Hello there! My name is Mr. Seconds. " +
-    "It's wonderful to meet you! " +
-    "What shall we talk about today?"
-  );
+  const [message, setMessage] = useState("");
 
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [chatHistory, setChatHistory] = useState<
+    ChatMessage[]
+  >([]);
 
-  const [speechError, setSpeechError] = useState("");
+  const [thinking, setThinking] = useState(false);
 
+  const [status, setStatus] = useState<
+    "idle" | "loading" | "speaking"
+  >("idle");
+
+  const [error, setError] = useState("");
   const [showInfo, setShowInfo] = useState(true);
 
-  const speechRef = useRef<SpeechTiming>(
-    newSpeechTiming()
-  );
+  const playbackRef = useRef<Playback | null>(null);
 
-  const utteranceRef =
-    useRef<SpeechSynthesisUtterance | null>(null);
+  const audioURLRef = useRef<string | null>(null);
+  const requestIdRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const supported =
-    typeof window !== "undefined" &&
-    "speechSynthesis" in window;
+  const busy = thinking || status !== "idle";
 
-  // Stop audio when this component is removed.
+  const latestAnswer =
+    [...chatHistory]
+      .reverse()
+      .find((item) => item.role === "assistant")
+      ?.content ?? "";
+
+  function cleanupAudio() {
+    const playback = playbackRef.current;
+
+    if (playback) {
+      const audio = playback.audio;
+
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+
+      playbackRef.current = null;
+    }
+
+    if (audioURLRef.current) {
+      URL.revokeObjectURL(audioURLRef.current);
+      audioURLRef.current = null;
+    }
+  }
+
+  function stopSpeaking() {
+    requestIdRef.current += 1;
+
+    abortRef.current?.abort();
+    abortRef.current = null;
+
+    cleanupAudio();
+    setStatus("idle");
+  }
+
   useEffect(() => {
     return () => {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
+      requestIdRef.current += 1;
+      abortRef.current?.abort();
+
+      if (playbackRef.current) {
+        const audio = playbackRef.current.audio;
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
       }
 
-      speechRef.current.active = false;
-      utteranceRef.current = null;
+      if (audioURLRef.current) {
+        URL.revokeObjectURL(audioURLRef.current);
+      }
+
+      playbackRef.current = null;
+      audioURLRef.current = null;
     };
   }, []);
 
-  function stopSpeaking() {
-    // Invalidate callbacks from the old utterance.
-    utteranceRef.current = null;
-    speechRef.current.active = false;
+  // ========================================
+  // AZURE SPEECH
+  // ========================================
 
-    if (supported) {
-      window.speechSynthesis.cancel();
-    }
+  async function speak(textOverride?: string) {
+    const text = (textOverride ?? message).trim();
 
-    setIsSpeaking(false);
-  }
-
-  function speak() {
-    if (!supported) {
-      setSpeechError(
-        "This browser does not support speech synthesis."
-      );
+    if (!text) {
+      setError("Please enter something to say.");
       return;
     }
 
-    const text = message.trim();
-
-    if (!text) {
-      setSpeechError("Please type something first.");
+    if (text.length > 300) {
+      setError(
+        "Speech is currently limited to 300 characters."
+      );
       return;
     }
 
     stopSpeaking();
-    setSpeechError("");
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    setError("");
+    setStatus("loading");
 
-    utterance.lang = "en-US";
-    utterance.rate = 0.92;
-    utterance.pitch = 1.07;
-    utterance.volume = 1;
+    const requestId = requestIdRef.current;
 
-    // Prefer an available English voice.
-    const voices = window.speechSynthesis.getVoices();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-    const preferred =
-      voices.find(
-        (voice) =>
-          voice.lang.toLowerCase() === "en-us" &&
-          voice.localService
-      ) ??
-      voices.find(
-        (voice) =>
-          voice.lang.toLowerCase().startsWith("en")
-      );
+    try {
+      const response = await fetch("/api/speech", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+        signal: controller.signal,
+      });
 
-    if (preferred) {
-      utterance.voice = preferred;
-    }
-
-    utteranceRef.current = utterance;
-
-    const timing = speechRef.current;
-    timing.text = text;
-    timing.active = false;
-    timing.hasBoundary = false;
-    timing.word = "";
-    timing.startedAt = 0;
-    timing.wordStartedAt = 0;
-
-    utterance.onstart = () => {
-      if (utteranceRef.current !== utterance) {
-        return;
-      }
-
-      const now = performance.now();
-
-      timing.active = true;
-      timing.startedAt = now;
-      timing.wordStartedAt = now;
-      timing.hasBoundary = false;
-
-      setIsSpeaking(true);
-    };
-
-    utterance.onboundary = (event) => {
-      if (utteranceRef.current !== utterance) {
-        return;
-      }
-
-      const remainder = text.slice(event.charIndex);
-
-      const word = remainder.match(/^[A-Za-z']+/)?.[0];
-
-      if (word) {
-        timing.word = word;
-        timing.wordStartedAt = performance.now();
-        timing.hasBoundary = true;
-      }
-    };
-
-    utterance.onend = () => {
-      if (utteranceRef.current !== utterance) {
-        return;
-      }
-
-      timing.active = false;
-      utteranceRef.current = null;
-      setIsSpeaking(false);
-    };
-
-    utterance.onerror = (event) => {
-      if (utteranceRef.current !== utterance) {
-        return;
-      }
-
-      timing.active = false;
-      utteranceRef.current = null;
-      setIsSpeaking(false);
-
-      if (event.error !== "canceled") {
-        setSpeechError(
-          `Speech error: ${event.error}`
+      if (!response.ok) {
+        throw new Error(
+          `Azure Speech request failed: ${response.status}`
         );
       }
-    };
 
-    window.speechSynthesis.speak(utterance);
+      const result =
+        (await response.json()) as SpeechResult;
+
+      if (requestId !== requestIdRef.current) return;
+
+      if (
+        !result.audioBase64 ||
+        !Array.isArray(result.visemes)
+      ) {
+        throw new Error("Invalid Azure response.");
+      }
+
+      const url = createAudioURL(
+        result.audioBase64,
+        result.mimeType || "audio/wav"
+      );
+
+      audioURLRef.current = url;
+
+      const audio = new Audio(url);
+      audio.preload = "auto";
+
+      const visemes = [...result.visemes].sort(
+        (a, b) => a.timeMs - b.timeMs
+      );
+
+      playbackRef.current = { audio, visemes };
+
+      audio.onended = () => {
+        if (requestId !== requestIdRef.current) return;
+        cleanupAudio();
+        setStatus("idle");
+      };
+
+      audio.onerror = () => {
+        if (requestId !== requestIdRef.current) return;
+        cleanupAudio();
+        setStatus("idle");
+        setError("Audio playback failed.");
+      };
+
+      await audio.play();
+
+      if (requestId === requestIdRef.current) {
+        setStatus("speaking");
+      }
+    } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+
+      cleanupAudio();
+      setStatus("idle");
+
+      if (
+        err instanceof DOMException &&
+        err.name === "AbortError"
+      ) {
+        return;
+      }
+
+      const details =
+        err instanceof Error
+          ? err.message
+          : "Unknown audio error";
+
+      setError(details);
+      console.error("Azure Speech:", err);
+    } finally {
+      if (requestId === requestIdRef.current) {
+        abortRef.current = null;
+      }
+    }
   }
+
+  // ========================================
+  // GEMINI AI
+  // ========================================
+
+  async function askMrSeconds() {
+    const question = message.trim();
+
+    if (!question || busy) return;
+
+    setError("");
+    setThinking(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: question,
+          history: chatHistory.slice(-8),
+        }),
+      });
+
+      if (!response.ok) {
+        const failure = await response
+          .json()
+          .catch(() => null);
+
+        const explanation =
+          typeof failure?.error === "string"
+            ? failure.error
+            : `Gemini returned HTTP ${response.status}`;
+
+        throw new Error(explanation);
+      }
+
+      const data = (await response.json()) as {
+        answer?: string;
+        model?: string;
+      };
+
+      const answer = data.answer?.trim();
+
+      if (!answer) {
+        throw new Error(
+          "Gemini returned an empty response."
+        );
+      }
+
+      setChatHistory((previous) => [
+        ...previous.slice(-12),
+        {
+          role: "user",
+          content: question,
+        },
+        {
+          role: "assistant",
+          content: answer,
+        },
+      ]);
+
+      // Clear the question so the user can
+      // easily type the next message.
+      setMessage("");
+
+      // Reuse the same working Azure
+      // speech and lip-sync pipeline.
+      if (answer.length <= 300) {
+        await speak(answer);
+      } else {
+        setError(
+          "Mr. Seconds answered, but the response " +
+          "is too long for the current 300-character " +
+          "speech limit."
+        );
+      }
+    } catch (err) {
+      console.error("Gemini conversation error:", err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Couldn't contact Gemini."
+      );
+    } finally {
+      setThinking(false);
+    }
+  }
+
+  // ========================================
+  // INTERFACE
+  // ========================================
 
   return (
     <main className="app">
@@ -1092,14 +1114,14 @@ export default function App() {
         </div>
 
         <span className="version">
-          Voice Preview • V2.3
+          Gemini AI • V2.5
         </span>
       </header>
 
       <section className="viewer">
         <ModelViewer
           waveRequest={waveRequest}
-          speechRef={speechRef}
+          playbackRef={playbackRef}
         />
 
         <div className="animation-controls">
@@ -1122,51 +1144,96 @@ export default function App() {
               className="speech-label"
               htmlFor="speech-message"
             >
-              What should Mr. Seconds say?
+              Ask Mr. Seconds anything
             </label>
 
             <textarea
               id="speech-message"
+              className="speech-input"
               value={message}
-              rows={4}
+              rows={3}
               maxLength={1000}
+              placeholder="Type a question..."
               onChange={(event) => {
                 setMessage(event.target.value);
               }}
-              placeholder="Type a message..."
-              className="speech-input"
             />
 
             <button
               className="wave-button talk-button"
-              disabled={!supported}
-              onClick={
-                isSpeaking ? stopSpeaking : speak
-              }
+              onClick={() => void askMrSeconds()}
+              disabled={busy || !message.trim()}
             >
-              {isSpeaking
-                ? "⏹ Stop Speaking"
-                : "🔊 Speak"}
+              {thinking
+                ? "🧠 Thinking..."
+                : "✨ Ask Mr. Seconds"}
             </button>
 
-            {speechError && (
-              <p className="speech-error" role="alert">
-                {speechError}
+            <button
+              className="wave-button"
+              onClick={() => {
+                if (status === "idle") {
+                  void speak();
+                } else {
+                  stopSpeaking();
+                }
+              }}
+              disabled={thinking}
+            >
+              {status === "loading"
+                ? "⏹ Cancel Speech"
+                : status === "speaking"
+                ? "⏹ Stop Speaking"
+                : "🔊 Speak Typed Text"}
+            </button>
+
+            {latestAnswer && (
+              <div
+                className="ai-response"
+                aria-live="polite"
+                style={{
+                  marginTop: 14,
+                  padding: 14,
+                  borderRadius: 12,
+                  background: "rgba(16, 145, 149, 0.08)",
+                  border:
+                    "1px solid rgba(16, 145, 149, 0.2)",
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>Mr. Seconds says:</strong>
+
+                <p style={{ marginTop: 8, marginBottom: 0 }}>
+                  {latestAnswer}
+                </p>
+              </div>
+            )}
+
+            {error && (
+              <p
+                className="speech-error"
+                role="alert"
+                style={{ marginTop: 10 }}
+              >
+                {error}
               </p>
             )}
           </div>
 
           <div className="control-description">
-            {isSpeaking
+            {thinking
+              ? "Gemini is generating a response..."
+              : status === "loading"
+              ? "Generating Dustin's speech..."
+              : status === "speaking"
               ? "Mr. Seconds is speaking..."
-              : "Idle and blinking active"}
+              : "Ready to chat!"}
           </div>
         </div>
 
         {showInfo && (
           <div className="viewer-info">
             <strong>Meet Mr. Seconds!</strong>
-
             <p>Drag to rotate · Scroll to zoom</p>
 
             <button
@@ -1179,8 +1246,8 @@ export default function App() {
       </section>
 
       <footer className="footer">
-        <span>● Interactive 3D companion</span>
-        <span>Mr. Seconds • V2.3</span>
+        <span>● Interactive AI companion</span>
+        <span>Gemini + Azure • V2.5</span>
       </footer>
     </main>
   );

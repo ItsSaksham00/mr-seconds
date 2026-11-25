@@ -493,14 +493,18 @@ and delightful personal companion.
 
 // Keep API accessible locally.
 // Vite proxies /api requests to this port.
-app.listen(PORT, "127.0.0.1", () => {
-  console.log("");
-  console.log("===================================");
-  console.log("MR. SECONDS V2.5 API SERVER");
-  console.log(`http://127.0.0.1:${PORT}`);
-  console.log(`Azure Region: ${REGION}`);
-  console.log(`Azure Voice: ${VOICE}`);
-  console.log(`Gemini Model: ${GEMINI_MODEL}`);
-  console.log("===================================");
-  console.log("");
-});
+
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log("===================================");
+    console.log("MR. SECONDS V2.5 API SERVER");
+    console.log(`http://127.0.0.1:${PORT}`);
+    console.log(`Azure Region: ${REGION}`);
+    console.log(`Azure Voice: ${VOICE}`);
+    console.log(`Gemini Model: ${GEMINI_MODEL}`);
+    console.log("===================================");
+  });
+}
+
+export default app;
